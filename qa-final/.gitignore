@@ -5,3 +5,6 @@ playwright-report/
 blob-report/
 playwright/.cache/
 .env
+# Capturas generadas al ejecutar los casos (entregables locales; no versionar)
+evidence/*
+!evidence/.gitkeep
