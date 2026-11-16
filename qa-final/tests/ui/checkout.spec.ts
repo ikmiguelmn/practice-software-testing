@@ -13,6 +13,9 @@ const DIRECCION = {
   country: 'CO',
   postal_code: '760001',
   house_number: '10',
+  street: 'Calle 5 #10-20',
+  city: 'Cali',
+  state: 'Valle',
 };
 
 const TARJETA = {
@@ -71,8 +74,8 @@ async function completarDireccion(page: Page) {
   await page.getByTestId('proceed-3').click();
 }
 
-/** Precondiciones de pago: sesión + 1 producto + dirección → paso Payment. */
-async function irAlPasoDePago(page: Page) {
+/** Sesión + 1 producto → paso Billing Address (sin completar dirección). */
+async function irAlPasoDeDireccion(page: Page) {
   await iniciarSesion(page);
   await agregarProductoAlCarrito(page);
 
@@ -84,6 +87,13 @@ async function irAlPasoDePago(page: Page) {
   await expect(page.getByTestId('proceed-2')).toBeVisible();
   await page.getByTestId('proceed-2').click();
 
+  await expect(page.getByRole('heading', { name: 'Billing Address' })).toBeVisible();
+  await expect(page.getByTestId('postal_code')).toBeVisible();
+}
+
+/** Precondiciones de pago: sesión + 1 producto + dirección → paso Payment. */
+async function irAlPasoDePago(page: Page) {
+  await irAlPasoDeDireccion(page);
   await completarDireccion(page);
   await expect(page.getByTestId('payment-method')).toBeVisible();
 }
@@ -171,5 +181,33 @@ test('TC-CHK-002 Tarjeta con fecha de expiración vencida', async ({ page }) => 
 
   // Postcondiciones: sigue en pago; carrito conserva el producto
   await expect(page.getByTestId('payment-method')).toBeVisible();
+  await expect(page.getByTestId('cart-quantity')).toHaveText('1');
+});
+
+test('TC-CHK-003 Dirección de facturación con código postal vacío', async ({ page }) => {
+  await irAlPasoDeDireccion(page);
+
+  // Datos del caso (+ house_number †: obligatorio en address.component.ts, no está en el caso)
+  await page.getByTestId('country').selectOption(DIRECCION.country);
+  await page.getByTestId('street').fill(DIRECCION.street);
+  await page.getByTestId('city').fill(DIRECCION.city);
+  await page.getByTestId('state').fill(DIRECCION.state);
+  await page.getByTestId('house_number').fill(DIRECCION.house_number);
+  await page.getByTestId('postal_code').fill('');
+  await page.getByTestId('postal_code').click();
+  await page.getByTestId('postal_code').blur();
+
+  // Esperado 1 (diseño): "Postcode is required" — † no se renderiza en checkout/address
+  // (sí en register + en.json). El bloqueo observable es el botón deshabilitado.
+  await page.screenshot({ path: 'evidence/TC-CHK-003-postal-vacio.png', fullPage: true });
+
+  // Esperado 2: Proceed to checkout deshabilitado (cusAddress.valid === false)
+  await expect(page.getByTestId('proceed-3')).toBeDisabled();
+
+  // Esperado 3: el wizard mantiene Payment en el DOM, pero no está visible/activo
+  await expect(page.getByTestId('payment-method')).toBeHidden();
+
+  // Postcondiciones: permanece en dirección; carrito intacto
+  await expect(page.getByRole('heading', { name: 'Billing Address' })).toBeVisible();
   await expect(page.getByTestId('cart-quantity')).toHaveText('1');
 });
