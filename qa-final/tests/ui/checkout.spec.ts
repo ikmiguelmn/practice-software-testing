@@ -7,6 +7,7 @@ const CUSTOMER_PASSWORD = 'welcome01';
 const PRODUCTO = 'Combination Pliers';
 const PRECIO = 14.15;
 const TOTAL_CARRITO = `$${PRECIO.toFixed(2)}`;
+const MENSAJE_EXPIRACION_PASADA = 'Expiration date must be in the future.';
 
 const DIRECCION = {
   country: 'CO',
@@ -20,6 +21,15 @@ const TARJETA = {
   cvv: '123',
   holder: 'Iker Mainguez',
 };
+
+/** BVA: MM/YYYY del mes calendario anterior al actual (límite inferior inválido). */
+function expiracionMesAnterior(): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${mm}/${d.getFullYear()}`;
+}
 
 async function iniciarSesion(page: Page) {
   await page.goto('/auth/login');
@@ -61,7 +71,8 @@ async function completarDireccion(page: Page) {
   await page.getByTestId('proceed-3').click();
 }
 
-test('TC-CHK-001 Compra E2E con tarjeta de crédito', async ({ page }) => {
+/** Precondiciones de pago: sesión + 1 producto + dirección → paso Payment. */
+async function irAlPasoDePago(page: Page) {
   await iniciarSesion(page);
   await agregarProductoAlCarrito(page);
 
@@ -74,6 +85,11 @@ test('TC-CHK-001 Compra E2E con tarjeta de crédito', async ({ page }) => {
   await page.getByTestId('proceed-2').click();
 
   await completarDireccion(page);
+  await expect(page.getByTestId('payment-method')).toBeVisible();
+}
+
+test('TC-CHK-001 Compra E2E con tarjeta de crédito', async ({ page }) => {
+  await irAlPasoDePago(page);
 
   await page.getByTestId('payment-method').selectOption('credit-card');
   await page.getByTestId('credit_card_number').fill(TARJETA.number);
@@ -118,4 +134,42 @@ test('TC-CHK-001 Compra E2E con tarjeta de crédito', async ({ page }) => {
   await expect(fila).toBeVisible();
   await expect(fila.locator('td').nth(3)).toHaveText(totalFactura);
   expect(totalFactura).toBe(TOTAL_CARRITO);
+});
+
+test('TC-CHK-002 Tarjeta con fecha de expiración vencida', async ({ page }) => {
+  const expiracion = expiracionMesAnterior(); // p.ej. 10/2026 si hoy es nov-2026 (BVA)
+
+  await irAlPasoDePago(page);
+
+  await page.getByTestId('payment-method').selectOption('credit-card');
+  await page.getByTestId('credit_card_number').fill(TARJETA.number);
+  await page.getByTestId('expiration_date').fill(expiracion);
+  await page.getByTestId('expiration_date').blur();
+  await page.getByTestId('cvv').fill(TARJETA.cvv);
+  await page.getByTestId('card_holder_name').fill(TARJETA.holder);
+
+  // Esperado 1: mensaje de expiración inválida (en.json date-error-past)
+  await expect(page.locator('.alert-danger')).toContainText(MENSAJE_EXPIRACION_PASADA);
+  await page.screenshot({ path: 'evidence/TC-CHK-002-expiracion-vencida.png', fullPage: true });
+
+  // Esperado 2: Confirm deshabilitado (cusPayment.valid === false)
+  await expect(page.getByTestId('finish')).toBeDisabled();
+
+  // Esperado 3: no se envía petición de pago ni de factura
+  const huboPago = page
+    .waitForRequest(
+      (req) => {
+        const path = new URL(req.url()).pathname;
+        return path.includes('/payment/check') || (path === '/invoices' && req.method() === 'POST');
+      },
+      { timeout: 1500 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  await page.getByTestId('finish').click({ force: true });
+  expect(await huboPago).toBe(false);
+
+  // Postcondiciones: sigue en pago; carrito conserva el producto
+  await expect(page.getByTestId('payment-method')).toBeVisible();
+  await expect(page.getByTestId('cart-quantity')).toHaveText('1');
 });
