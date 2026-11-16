@@ -8,6 +8,10 @@ const PRODUCTO = 'Combination Pliers';
 const PRECIO = 14.15;
 const TOTAL_CARRITO = `$${PRECIO.toFixed(2)}`;
 const MENSAJE_EXPIRACION_PASADA = 'Expiration date must be in the future.';
+const MENSAJE_GIFT_NUMBER =
+  'Please enter a valid gift card number: exactly 16 letters and/or digits.';
+const MENSAJE_GIFT_CODE =
+  'Please enter a valid validation code: exactly 4 letters and/or digits.';
 
 const DIRECCION = {
   country: 'CO',
@@ -209,5 +213,44 @@ test('TC-CHK-003 Dirección de facturación con código postal vacío', async ({
 
   // Postcondiciones: permanece en dirección; carrito intacto
   await expect(page.getByRole('heading', { name: 'Billing Address' })).toBeVisible();
+  await expect(page.getByTestId('cart-quantity')).toHaveText('1');
+});
+
+test('TC-CHK-004 Gift card con código inválido', async ({ page }) => {
+  await irAlPasoDePago(page);
+
+  await page.getByTestId('payment-method').selectOption('gift-card');
+  // Datos del caso: no cumplen ^[a-zA-Z0-9]{16}$ / ^[a-zA-Z0-9]{4}$ (UI + GiftCard.php)
+  await page.getByTestId('gift_card_number').fill('0000-INVALID');
+  await page.getByTestId('gift_card_number').blur();
+  await page.getByTestId('validation_code').fill('000');
+  await page.getByTestId('validation_code').blur();
+
+  // Esperado 1: errores de formato en UI (en.json gift-card.*)
+  await expect(page.getByText(MENSAJE_GIFT_NUMBER)).toBeVisible();
+  await expect(page.getByText(MENSAJE_GIFT_CODE)).toBeVisible();
+  await page.screenshot({ path: 'evidence/TC-CHK-004-gift-card-invalida.png', fullPage: true });
+
+  // Confirm deshabilitado → no llega a API; no hay "Payment was successful" ni factura
+  await expect(page.getByTestId('finish')).toBeDisabled();
+  await expect(page.getByTestId('payment-success-message')).toHaveCount(0);
+  await expect(page.locator('#order-confirmation')).toHaveCount(0);
+
+  const huboPago = page
+    .waitForRequest(
+      (req) => {
+        const path = new URL(req.url()).pathname;
+        return path.includes('/payment/check') || (path === '/invoices' && req.method() === 'POST');
+      },
+      { timeout: 1500 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  await page.getByTestId('finish').click({ force: true });
+  expect(await huboPago).toBe(false);
+
+  // Postcondiciones: sigue en pago; puede cambiar de método; carrito intacto
+  await expect(page.getByTestId('payment-method')).toBeVisible();
+  await expect(page.getByTestId('payment-method')).toBeEnabled();
   await expect(page.getByTestId('cart-quantity')).toHaveText('1');
 });
